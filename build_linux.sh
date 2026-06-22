@@ -5,9 +5,12 @@ python3.8 -m venv .venv-isyntax-linux
 source .venv-isyntax-linux/bin/activate
 
 python -m pip install --upgrade pip
-pip install -r requirements-linux-py38.txt
+python -m pip install -r requirements-linux-py38.txt
 
-pyinstaller --clean --noconfirm iSyntaxToTIFF.spec
+rm -rf dist build
+python -m PyInstaller --clean --noconfirm --distpath "$(pwd)/dist" --workpath "$(pwd)/build" "$(pwd)/iSyntaxToTIFF.spec"
+
+test -d "dist/iSyntaxToTIFF"
 
 echo
 echo "Build finished."
