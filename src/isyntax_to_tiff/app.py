@@ -37,6 +37,8 @@ import re
 import traceback
 import subprocess
 import threading
+import concurrent.futures
+import multiprocessing
 from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -67,6 +69,8 @@ APP_CITATION = (
     "iSyntax whole-slide images to pyramidal OME-TIFF. Zenodo; 2026. "
     "doi:10.5281/zenodo.20798592"
 )
+
+_SDK_TEST_CACHE = set()
 
 
 def _app_config_dir() -> Path:
@@ -571,6 +575,10 @@ def test_philips_sdk(sdk_root: Path) -> Tuple[bool, str]:
     sdk_root = Path(sdk_root)
     apply_philips_sdk_paths(sdk_root)
 
+    cache_key = str(sdk_root.resolve()) if sdk_root.exists() else str(sdk_root)
+    if cache_key in _SDK_TEST_CACHE:
+        return True, "SDK root: %s\nSDK already tested in this session\nReady for iSyntax conversion" % sdk_root
+
     lines = ["SDK root: %s" % sdk_root]
     try:
         import pixelengine  # noqa: F401
@@ -601,6 +609,7 @@ def test_philips_sdk(sdk_root: Path) -> Tuple[bool, str]:
         return False, "\n".join(lines)
 
     lines.append("Ready for iSyntax conversion")
+    _SDK_TEST_CACHE.add(cache_key)
     return True, "\n".join(lines)
 
 
@@ -720,12 +729,23 @@ def isyntax_mpp_from_slide(slide) -> Optional[Tuple[float, float]]:
     return None
 
 
-def select_pyramid_levels(slide, max_levels: int = 8, min_dimension: int = 1024) -> List[int]:
+def select_pyramid_levels(slide, max_levels: int = 0, min_dimension: int = 1024) -> List[int]:
+    """Select iSyntax pyramid levels to write to the OME-TIFF.
+
+    max_levels <= 0 means Auto mode: write all pyramid levels exposed by OpenPhi.
+    max_levels > 0 means manual mode: write level 0 and select up to max_levels
+    lower-resolution levels, stopping after min_dimension is reached.
+    """
     dims, downsamples = get_slide_dimensions(slide)
     if len(dims) <= 1:
         return [0]
 
-    max_levels = max(1, int(max_levels or 1))
+    # Auto mode: imitate the pyramid available in the source reader.
+    # Level 0 is always preserved, so maximum resolution is not reduced.
+    if max_levels is None or int(max_levels) <= 0:
+        return list(range(len(dims)))
+
+    max_levels = max(1, int(max_levels))
     min_dimension = max(1, int(min_dimension or 1))
     selected = [0]
     last_ds = float(downsamples[0])
@@ -883,7 +903,7 @@ def convert_isyntax_to_ome_tiff(
     tile_size: int = 512,
     compression: str = "deflate",
     jpeg_quality: int = 100,
-    max_pyramid_levels: int = 8,
+    max_pyramid_levels: int = 0,
     min_pyramid_dimension: int = 1024,
     view: str = "display",
     overwrite: bool = False,
@@ -1058,6 +1078,40 @@ def convert_isyntax_to_ome_tiff(
 # Background worker
 # ============================================================
 
+def _convert_one_file_process_job(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert one file in a separate process.
+
+    This is intentionally file-level parallelism, not tile-level parallelism,
+    to keep OpenPhi/Philips SDK reads and TIFF writing isolated per file.
+    """
+    input_path = Path(payload["input_path"])
+    sdk_root = Path(payload["sdk_root"])
+    output_dir = Path(payload["output_dir"]) if payload.get("output_dir") else None
+    options = dict(payload.get("options") or {})
+
+    out = convert_isyntax_to_ome_tiff(
+        input_path=input_path,
+        sdk_root=sdk_root,
+        output_dir=output_dir,
+        tile_size=options.get("tile_size", 512),
+        compression=options.get("compression", "deflate"),
+        jpeg_quality=options.get("jpeg_quality", 100),
+        max_pyramid_levels=options.get("max_pyramid_levels", 0),
+        min_pyramid_dimension=options.get("min_pyramid_dimension", 1024),
+        view=options.get("view", "display"),
+        overwrite=options.get("overwrite", False),
+        cancel_event=None,
+        progress_callback=None,
+        message_callback=None,
+    )
+
+    return {
+        "input": str(input_path),
+        "output": str(out),
+        "status": "success",
+        "message": "",
+    }
+
 class ConvertWorker(QThread):
     message = pyqtSignal(str)
     progress = pyqtSignal(int, int)
@@ -1080,51 +1134,134 @@ class ConvertWorker(QThread):
         rows = []
         ok = 0
         failed = 0
-        try:
-            for file_i, p in enumerate(self.input_paths, start=1):
-                if self.cancel_event.is_set():
-                    raise RuntimeError("Cancelled by user.")
-                try:
-                    self.message.emit("Starting file %s/%s: %s" % (file_i, len(self.input_paths), p.name))
-                    out = convert_isyntax_to_ome_tiff(
-                        input_path=p,
-                        sdk_root=self.sdk_root,
-                        output_dir=self.output_dir,
-                        tile_size=self.options.get("tile_size", 512),
-                        compression=self.options.get("compression", "deflate"),
-                        jpeg_quality=self.options.get("jpeg_quality", 100),
-                        max_pyramid_levels=self.options.get("max_pyramid_levels", 8),
-                        min_pyramid_dimension=self.options.get("min_pyramid_dimension", 1024),
-                        view=self.options.get("view", "display"),
-                        overwrite=self.options.get("overwrite", False),
-                        cancel_event=self.cancel_event,
-                        progress_callback=self.progress.emit,
-                        message_callback=self.message.emit,
-                    )
-                    ok += 1
-                    rows.append({
-                        "timestamp": datetime.now().isoformat(timespec="seconds"),
-                        "input": str(p),
-                        "output": str(out),
-                        "status": "success",
-                        "message": "",
-                    })
-                except Exception as exc:
-                    failed += 1
-                    rows.append({
-                        "timestamp": datetime.now().isoformat(timespec="seconds"),
-                        "input": str(p),
-                        "output": "",
-                        "status": "failed",
-                        "message": "%s\n%s" % (exc, traceback.format_exc()),
-                    })
-                    self.message.emit("FAILED: %s | %s" % (p.name, exc))
-                    if self.options.get("stop_on_error", False):
-                        raise
 
-            log_dir = self.output_dir or (self.input_paths[0].parent if self.input_paths else Path.cwd())
+        try:
+            paths = list(self.input_paths)
+            parallel_files = int(self.options.get("parallel_files", 1) or 1)
+
+            available_cores = os.cpu_count() or 1
+            parallel_max = max(1, available_cores - 1)
+            parallel_files = max(1, min(parallel_files, parallel_max, len(paths)))
+
+            # Serial mode keeps detailed tile-level progress and supports safe cancellation.
+            if parallel_files <= 1 or len(paths) <= 1:
+                for file_i, p in enumerate(paths, start=1):
+                    if self.cancel_event.is_set():
+                        raise RuntimeError("Cancelled by user.")
+
+                    try:
+                        self.message.emit("Starting file %s/%s: %s" % (file_i, len(paths), p.name))
+                        out = convert_isyntax_to_ome_tiff(
+                            input_path=p,
+                            sdk_root=self.sdk_root,
+                            output_dir=self.output_dir,
+                            tile_size=self.options.get("tile_size", 512),
+                            compression=self.options.get("compression", "deflate"),
+                            jpeg_quality=self.options.get("jpeg_quality", 100),
+                            max_pyramid_levels=self.options.get("max_pyramid_levels", 0),
+                            min_pyramid_dimension=self.options.get("min_pyramid_dimension", 1024),
+                            view=self.options.get("view", "display"),
+                            overwrite=self.options.get("overwrite", False),
+                            cancel_event=self.cancel_event,
+                            progress_callback=self.progress.emit,
+                            message_callback=self.message.emit,
+                        )
+
+                        ok += 1
+                        rows.append({
+                            "timestamp": datetime.now().isoformat(timespec="seconds"),
+                            "input": str(p),
+                            "output": str(out),
+                            "status": "success",
+                            "message": "",
+                        })
+
+                    except Exception as exc:
+                        failed += 1
+                        rows.append({
+                            "timestamp": datetime.now().isoformat(timespec="seconds"),
+                            "input": str(p),
+                            "output": "",
+                            "status": "failed",
+                            "message": "%s\n%s" % (exc, traceback.format_exc()),
+                        })
+                        self.message.emit("FAILED: %s | %s" % (p.name, exc))
+
+                        if self.options.get("stop_on_error", False):
+                            raise
+
+            # Parallel mode processes multiple files at the same time.
+            # Progress is file-level, not tile-level. This is safer than tile-level
+            # parallelism because each process owns its own OpenPhi reader and TIFF writer.
+            else:
+                self.message.emit(
+                    "Parallel conversion enabled: %s file workers. "
+                    "Progress will be shown by completed files." % parallel_files
+                )
+                self.progress.emit(0, len(paths))
+
+                payloads = []
+                for p in paths:
+                    payloads.append({
+                        "input_path": str(p),
+                        "sdk_root": str(self.sdk_root),
+                        "output_dir": str(self.output_dir) if self.output_dir else "",
+                        "options": dict(self.options),
+                    })
+
+                done_files = 0
+
+                with concurrent.futures.ProcessPoolExecutor(max_workers=parallel_files) as executor:
+                    future_to_path = {
+                        executor.submit(_convert_one_file_process_job, payload): Path(payload["input_path"])
+                        for payload in payloads
+                    }
+
+                    for future in concurrent.futures.as_completed(future_to_path):
+                        p = future_to_path[future]
+
+                        if self.cancel_event.is_set():
+                            for f in future_to_path:
+                                f.cancel()
+                            raise RuntimeError(
+                                "Cancelled by user. Already running file conversions may finish in the background."
+                            )
+
+                        try:
+                            result = future.result()
+                            ok += 1
+                            rows.append({
+                                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                                "input": result.get("input", str(p)),
+                                "output": result.get("output", ""),
+                                "status": "success",
+                                "message": "",
+                            })
+                            self.message.emit("DONE: %s" % p.name)
+
+                        except Exception as exc:
+                            failed += 1
+                            rows.append({
+                                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                                "input": str(p),
+                                "output": "",
+                                "status": "failed",
+                                "message": "%s\n%s" % (exc, traceback.format_exc()),
+                            })
+                            self.message.emit("FAILED: %s | %s" % (p.name, exc))
+
+                            if self.options.get("stop_on_error", False):
+                                for f in future_to_path:
+                                    f.cancel()
+                                raise
+
+                        done_files += 1
+                        self.progress.emit(done_files, len(paths))
+
+            log_dir = self.output_dir or (paths[0].parent if paths else Path.cwd())
             log_dir.mkdir(parents=True, exist_ok=True)
             log_path = log_dir / ("iSyntaxToTIFF_log_%s.csv" % datetime.now().strftime("%Y%m%d_%H%M%S"))
+
             with open(str(log_path), "w", newline="", encoding="utf-8") as f:
                 fieldnames = ["timestamp", "input", "output", "status", "message"]
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -1133,6 +1270,7 @@ class ConvertWorker(QThread):
                     writer.writerow({k: row.get(k, "") for k in fieldnames})
 
             self.finished_ok.emit({"ok": ok, "failed": failed, "log_path": str(log_path), "rows": rows})
+
         except Exception as exc:
             self.failed.emit("%s\n\n%s" % (exc, traceback.format_exc()))
 
@@ -1181,6 +1319,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._load_initial_settings()
         self._update_jpeg_enabled()
+        self._update_pyramid_controls()
         self._startup_python_warning()
 
     def _build_menu(self):
@@ -1343,10 +1482,15 @@ class MainWindow(QMainWindow):
         opt.addWidget(self.view_combo, row, 1)
         row += 1
 
-        opt.addWidget(QLabel("Max pyramid levels:"), row, 0)
+        opt.addWidget(QLabel("Pyramid levels:"), row, 0)
         self.max_levels_spin = QSpinBox()
-        self.max_levels_spin.setRange(1, 16)
-        self.max_levels_spin.setValue(8)
+        self.max_levels_spin.setRange(0, 64)
+        self.max_levels_spin.setSpecialValueText("Auto")
+        self.max_levels_spin.setValue(0)
+        self.max_levels_spin.setToolTip(
+            "Auto: write all pyramid levels exposed by OpenPhi for each image. "
+            "Set a number to limit the maximum number of levels."
+        )
         opt.addWidget(self.max_levels_spin, row, 1)
         row += 1
 
@@ -1355,7 +1499,22 @@ class MainWindow(QMainWindow):
         self.min_dim_spin.setRange(128, 8192)
         self.min_dim_spin.setSingleStep(128)
         self.min_dim_spin.setValue(1024)
+        self.min_dim_spin.setToolTip("Used only when Pyramid levels is set manually.")
         opt.addWidget(self.min_dim_spin, row, 1)
+        row += 1
+
+        opt.addWidget(QLabel("Parallel files:"), row, 0)
+        self.parallel_files_spin = QSpinBox()
+        available_cores = os.cpu_count() or 1
+        parallel_max = max(1, available_cores - 1)
+        self.parallel_files_spin.setRange(1, parallel_max)
+        self.parallel_files_spin.setValue(1)
+        self.parallel_files_spin.setToolTip(
+            "Number of files converted at the same time. "
+            "Use more than 1 only when converting multiple files. "
+            "Higher values use more CPU, RAM and disk bandwidth."
+        )
+        opt.addWidget(self.parallel_files_spin, row, 1)
         row += 1
 
         self.overwrite_check = QCheckBox("Overwrite existing output")
@@ -1401,6 +1560,7 @@ class MainWindow(QMainWindow):
         self.btn_clear_files.clicked.connect(self.file_list.clear)
         self.btn_preview.clicked.connect(self.preview_selected)
         self.compression_combo.currentIndexChanged.connect(self._update_jpeg_enabled)
+        self.max_levels_spin.valueChanged.connect(self._update_pyramid_controls)
         self.btn_convert.clicked.connect(self.start_conversion)
         self.btn_cancel.clicked.connect(self.cancel_conversion)
 
@@ -1450,8 +1610,10 @@ class MainWindow(QMainWindow):
                 "6. Choose compression and conversion options\n"
                 "7. Click Convert to pyramidal OME-TIFF\n\n"
                 "Notes:\n"
-                "- Deflate lossless is recommended.\n"
+                "- Deflate lossless is recommended when mathematically lossless RGB output is required.\n"
                 "- JPEG quality applies only when JPEG compression is selected.\n"
+                "- Pyramid levels Auto writes the levels exposed by OpenPhi for each image.\n"
+                "- Parallel files processes multiple files at the same time; default is 1.\n"
                 "- Output is a rendered RGB OME-TIFF from OpenPhi."
             )
         )
@@ -1656,6 +1818,16 @@ class MainWindow(QMainWindow):
         else:
             self.jpeg_quality_spin.setStyleSheet("")
 
+    def _update_pyramid_controls(self):
+        is_auto = self.max_levels_spin.value() == 0
+        self.min_dim_spin.setEnabled(not is_auto)
+        if is_auto:
+            self.min_dim_spin.setToolTip("Disabled in Auto mode. Auto uses the pyramid levels exposed by OpenPhi.")
+            self.min_dim_spin.setStyleSheet("color: gray;")
+        else:
+            self.min_dim_spin.setToolTip("Used only when Pyramid levels is set manually.")
+            self.min_dim_spin.setStyleSheet("")
+
     def gather_options(self) -> Dict[str, Any]:
         return {
             "compression": self.compression_combo.currentData(),
@@ -1664,6 +1836,7 @@ class MainWindow(QMainWindow):
             "view": self.view_combo.currentData(),
             "max_pyramid_levels": int(self.max_levels_spin.value()),
             "min_pyramid_dimension": int(self.min_dim_spin.value()),
+            "parallel_files": int(self.parallel_files_spin.value()),
             "overwrite": bool(self.overwrite_check.isChecked()),
             "stop_on_error": bool(self.stop_on_error_check.isChecked()),
         }
@@ -1690,8 +1863,9 @@ class MainWindow(QMainWindow):
             self.settings["last_output_dir"] = str(output_dir)
             _save_settings(self.settings)
         self.current_output_dir = output_dir
+        options = self.gather_options()
 
-        self.worker = ConvertWorker(root, paths, output_dir, self.gather_options())
+        self.worker = ConvertWorker(root, paths, output_dir, options)
         self.worker.message.connect(self.append_log)
         self.worker.progress.connect(self.on_progress)
         self.worker.finished_ok.connect(self.on_finished)
@@ -1700,7 +1874,10 @@ class MainWindow(QMainWindow):
         self.btn_convert.setEnabled(False)
         self.btn_cancel.setEnabled(True)
         self.progress.setValue(0)
-        self.append_log("Conversion started.")
+        parallel_files = int(options.get("parallel_files", 1))
+        max_pyr = int(options.get("max_pyramid_levels", 0))
+        pyr = "Auto" if max_pyr <= 0 else str(max_pyr)
+        self.append_log("Conversion started. Pyramid levels: %s | Parallel files: %s" % (pyr, parallel_files))
         self.worker.start()
 
     def cancel_conversion(self):
@@ -1737,6 +1914,8 @@ class MainWindow(QMainWindow):
 # ============================================================
 
 def main():
+    multiprocessing.freeze_support()
+
     # Avoid user-site packages interfering with PyInstaller/conda environments when run as script.
     os.environ.setdefault("PYTHONNOUSERSITE", "1")
     app = QApplication(sys.argv)
