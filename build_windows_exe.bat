@@ -10,7 +10,14 @@ if errorlevel 1 (
 
 set PYTHONNOUSERSITE=1
 
-python -m pip install --upgrade "pip<24"
+python -m pip --version >nul 2>&1
+if errorlevel 1 (
+    echo pip was not found in this environment. Installing pip with conda...
+    conda install -n isyntax_py37 -y pip setuptools wheel
+    if errorlevel 1 exit /b 1
+)
+
+python -m pip install --upgrade "pip<24" setuptools wheel
 if errorlevel 1 exit /b 1
 
 python -m pip install -r requirements-windows-py37.txt

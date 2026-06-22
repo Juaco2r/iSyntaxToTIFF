@@ -26,6 +26,23 @@ jobs:
           auto-activate-base: false
           channels: conda-forge,defaults
 
+      - name: Install Windows base packages
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-Location $env:GITHUB_WORKSPACE
+          $env:PYTHONNOUSERSITE = "1"
+
+          Write-Host "Conda info:"
+          conda info
+
+          Write-Host "Installing pip/setuptools/wheel inside isyntax_py37..."
+          conda install -n isyntax_py37 -y pip setuptools wheel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          conda run -n isyntax_py37 python -m pip --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Install Windows dependencies
         shell: pwsh
         run: |
@@ -33,7 +50,7 @@ jobs:
           Set-Location $env:GITHUB_WORKSPACE
           $env:PYTHONNOUSERSITE = "1"
 
-          conda run -n isyntax_py37 python -m pip install --upgrade "pip<24"
+          conda run -n isyntax_py37 python -m pip install --upgrade "pip<24" setuptools wheel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           conda run -n isyntax_py37 python -m pip install -r requirements-windows-py37.txt
@@ -49,6 +66,9 @@ jobs:
           conda run -n isyntax_py37 python -c "import sys; print(sys.executable); print(sys.version)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+          conda run -n isyntax_py37 python -m pip --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
           conda run -n isyntax_py37 python -c "import PyQt5; print('PyQt5 OK')"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -61,7 +81,7 @@ jobs:
           conda run -n isyntax_py37 python -m PyInstaller --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          Write-Host "OpenPhi is tested inside the app after the Philips Pathology SDK is selected."
+          Write-Host "OpenPhi/Philips SDK imports are tested inside the app after the Pathology SDK is selected."
 
       - name: Build and package Windows app
         shell: pwsh
@@ -155,7 +175,7 @@ jobs:
         run: |
           python3.8 -m venv .venv
           . .venv/bin/activate
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip setuptools wheel
           python -m pip install -r requirements-linux-py38.txt
 
       - name: Check Linux build environment
@@ -166,7 +186,7 @@ jobs:
           python -c "import tifffile; print('tifffile OK:', tifffile.__version__)"
           python -c "import numpy; print('numpy OK:', numpy.__version__)"
           python -m PyInstaller --version
-          echo "OpenPhi is tested inside the app after the Philips Pathology SDK is selected."
+          echo "OpenPhi/Philips SDK imports are tested inside the app after the Pathology SDK is selected."
 
       - name: Build and package Linux app
         run: |
