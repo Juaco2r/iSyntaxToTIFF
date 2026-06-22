@@ -1,14 +1,16 @@
-# -*- coding: utf-8 -*-
 """
-iSyntaxToOMETIFF Converter
-Standalone Windows/Python 3.7 PyQt5 application for converting Philips .isyntax
-files to pyramidal RGB OME-TIFF using Philips Pathology SDK + OpenPhi.
+iSyntaxToTIFF
+Standalone PyQt5 application for converting Philips .isyntax files to pyramidal
+RGB OME-TIFF using Philips Pathology SDK + OpenPhi.
+
+Windows builds target the Philips SDK Windows Python 3.7 package.
+Linux builds target the Philips SDK Ubuntu 20.04 Python 3.8 package.
 
 Design goal:
 - Keep the normal TiffCropper app intact.
 - This app only handles Philips SDK setup/test, iSyntax thumbnail preview,
   and .isyntax -> .ome.tif conversion.
-- Philips SDK is NOT bundled. The user selects/prepares the SDK folder once.
+- The user selects/prepares the Philips Pathology SDK ZIP or folder once.
 
 Tested setup from our debugging:
 - Python 3.7 environment
@@ -30,6 +32,8 @@ import json
 import math
 import shutil
 import inspect
+import zipfile
+import re
 import traceback
 import subprocess
 import threading
@@ -51,10 +55,29 @@ from PyQt5.QtWidgets import (
 
 
 APP_NAME = "iSyntaxToTIFF"
-APP_VERSION = "1.0"
+APP_VERSION = "1.1"
 APP_AUTHOR = "José Rodriguez-Rojas"
-APP_SETTINGS_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "TiffCropper"
-APP_SETTINGS_FILE = APP_SETTINGS_DIR / "isyntax_converter_settings.json"
+
+
+def _app_config_dir() -> Path:
+    if sys.platform.startswith("win"):
+        return Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_NAME
+    return Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / APP_NAME
+
+
+def _app_data_dir() -> Path:
+    if sys.platform.startswith("win"):
+        return Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / APP_NAME
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_NAME
+    return Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) / APP_NAME
+
+
+APP_SETTINGS_DIR = _app_config_dir()
+APP_SETTINGS_FILE = APP_SETTINGS_DIR / "settings.json"
+APP_SDK_EXTRACT_DIR = _app_data_dir() / "PhilipsSDK"
 
 
 # ============================================================
@@ -148,6 +171,14 @@ def _load_settings() -> Dict[str, Any]:
             return json.loads(APP_SETTINGS_FILE.read_text(encoding="utf-8"))
     except Exception:
         pass
+
+    # Backward-compatible migration from the first preview builds.
+    try:
+        old_file = Path(os.environ.get("APPDATA", str(Path.home()))) / "TiffCropper" / "isyntax_converter_settings.json"
+        if old_file.exists():
+            return json.loads(old_file.read_text(encoding="utf-8"))
+    except Exception:
+        pass
     return {}
 
 
@@ -169,6 +200,153 @@ def _open_folder(path: Path) -> None:
         subprocess.Popen(["open", str(path)])
     else:
         subprocess.Popen(["xdg-open", str(path)])
+
+
+def _safe_name(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(name)).strip("._") or "sdk"
+
+
+def _preferred_sdk_zip_keywords() -> List[str]:
+    if sys.platform.startswith("win"):
+        return ["pathologysdk", "windows", "py37", "research"]
+    if sys.platform.startswith("linux"):
+        return ["pathologysdk", "ubuntu20", "py38", "research"]
+    return ["pathologysdk", "research"]
+
+
+def _zip_matches_current_platform(zip_path: Path) -> bool:
+    name = zip_path.name.lower().replace("-", "_")
+    keywords = _preferred_sdk_zip_keywords()
+    return all(k.lower().replace("-", "_") in name for k in keywords)
+
+
+def _find_matching_sdk_zip(folder: Path) -> Optional[Path]:
+    folder = Path(folder)
+    if not folder.exists() or not folder.is_dir():
+        return None
+    try:
+        zips = [z for z in folder.rglob("*.zip") if z.is_file()]
+    except Exception:
+        return None
+
+    # Prefer the exact platform/research package.
+    for z in zips:
+        if _zip_matches_current_platform(z):
+            return z
+
+    # Fallback: any research PathologySDK ZIP matching the OS family.
+    platform_terms = ["windows"] if sys.platform.startswith("win") else (["ubuntu", "linux"] if sys.platform.startswith("linux") else [])
+    for z in zips:
+        name = z.name.lower()
+        if "pathologysdk" in name and "research" in name and any(t in name for t in platform_terms):
+            return z
+
+    # Last fallback: if there is only one PathologySDK ZIP, use it.
+    sdk_zips = [z for z in zips if "pathologysdk" in z.name.lower()]
+    if len(sdk_zips) == 1:
+        return sdk_zips[0]
+    return None
+
+
+def _safe_extract_zip(zip_path: Path, dest_dir: Path) -> None:
+    zip_path = Path(zip_path)
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_resolved = dest_dir.resolve()
+
+    with zipfile.ZipFile(str(zip_path), "r") as zf:
+        for member in zf.infolist():
+            member_name = member.filename.replace("\\", "/")
+            if member_name.startswith("/") or ".." in Path(member_name).parts:
+                raise RuntimeError("Unsafe path inside ZIP: %s" % member.filename)
+            target = (dest_dir / member_name).resolve()
+            if not str(target).startswith(str(dest_resolved)):
+                raise RuntimeError("Unsafe path inside ZIP: %s" % member.filename)
+        zf.extractall(str(dest_dir))
+
+
+def _extract_zip_if_needed(zip_path: Path, extract_parent: Path, message_callback=None) -> Path:
+    zip_path = Path(zip_path)
+    extract_parent = Path(extract_parent)
+    extract_parent.mkdir(parents=True, exist_ok=True)
+    out_dir = extract_parent / _safe_name(zip_path.stem)
+
+    if out_dir.exists() and find_philips_sdk_root(str(out_dir)) is not None:
+        if message_callback:
+            message_callback("SDK ZIP already prepared: %s" % out_dir)
+        return out_dir
+
+    if out_dir.exists():
+        try:
+            shutil.rmtree(str(out_dir))
+        except Exception:
+            pass
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if message_callback:
+        message_callback("Extracting SDK ZIP: %s" % zip_path.name)
+        message_callback("Extraction folder: %s" % out_dir)
+    _safe_extract_zip(zip_path, out_dir)
+    return out_dir
+
+
+def prepare_philips_sdk_source(source_path: Path, message_callback=None) -> Tuple[Optional[Path], str]:
+    """Accept either a Philips Pathology SDK ZIP or an extracted folder.
+
+    Supports both the platform-specific SDK ZIP and the larger
+    PathologySDK_2.0-L1_Packages ZIP that contains Windows/Linux packages.
+    """
+    source_path = Path(source_path).expanduser()
+    if not source_path.exists():
+        return None, "Selected SDK path does not exist: %s" % source_path
+
+    if source_path.is_dir():
+        root = find_philips_sdk_root(str(source_path))
+        if root is not None:
+            return root, "SDK root detected: %s" % root
+
+        nested_zip = _find_matching_sdk_zip(source_path)
+        if nested_zip is not None:
+            if message_callback:
+                message_callback("Found platform SDK ZIP inside selected folder: %s" % nested_zip.name)
+            return prepare_philips_sdk_source(nested_zip, message_callback)
+
+        return None, (
+            "Could not detect a Philips SDK root or matching SDK ZIP inside:\n%s\n\n"
+            "Expected either a folder containing Modules/philips.pathologysdk.* or a PathologySDK ZIP."
+        ) % source_path
+
+    if source_path.is_file() and source_path.suffix.lower() == ".zip":
+        try:
+            extracted = _extract_zip_if_needed(source_path, APP_SDK_EXTRACT_DIR, message_callback)
+        except Exception as exc:
+            return None, "Could not extract SDK ZIP:\n%s\n\n%s" % (source_path, exc)
+
+        root = find_philips_sdk_root(str(extracted))
+        if root is not None:
+            return root, "SDK root detected after extraction: %s" % root
+
+        nested_zip = _find_matching_sdk_zip(extracted)
+        if nested_zip is not None:
+            if message_callback:
+                message_callback("Found platform SDK package inside bundle: %s" % nested_zip.name)
+            try:
+                nested_extracted = _extract_zip_if_needed(nested_zip, APP_SDK_EXTRACT_DIR, message_callback)
+            except Exception as exc:
+                return None, "Could not extract nested SDK package:\n%s\n\n%s" % (nested_zip, exc)
+
+            root = find_philips_sdk_root(str(nested_extracted))
+            if root is not None:
+                return root, "SDK root detected after nested extraction: %s" % root
+
+        return None, (
+            "The ZIP was extracted, but no compatible SDK root was detected.\n\n"
+            "Selected ZIP: %s\nExtracted to: %s\n\n"
+            "For Windows, use the Windows Python 3.7 research SDK package.\n"
+            "For Linux, use the Ubuntu 20.04 Python 3.8 research SDK package."
+        ) % (source_path, extracted)
+
+    return None, "Please select a Philips Pathology SDK ZIP file or an extracted SDK folder."
 
 
 # ============================================================
@@ -202,7 +380,10 @@ def _candidate_sdk_roots_from(start_folder: Optional[str] = None) -> List[Path]:
     add(app_dir / "SDK2")
     add(app_dir / "PhilipsSDK" / "SDK2")
 
-    # Our known tested path
+    # Prepared SDKs extracted by the app.
+    add(APP_SDK_EXTRACT_DIR)
+
+    # Common Windows location used during development/testing.
     add(r"C:\PhilipsSDK\SDK2")
 
     return candidates
@@ -216,23 +397,39 @@ def _sdk_has_expected_layout(root: Path) -> bool:
     )
 
 
+def _iter_dirs_limited(root: Path, max_depth: int = 6) -> Iterable[Path]:
+    root = Path(root)
+    if not root.exists() or not root.is_dir():
+        return
+    base_depth = len(root.resolve().parts)
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        yield current
+        try:
+            current_depth = len(current.resolve().parts) - base_depth
+            if current_depth >= max_depth:
+                continue
+            for child in current.iterdir():
+                if child.is_dir():
+                    stack.append(child)
+        except Exception:
+            continue
+
+
 def find_philips_sdk_root(start_folder: Optional[str] = None) -> Optional[Path]:
     """Find a Philips Pathology SDK root folder containing Modules/..."""
     for cand in _candidate_sdk_roots_from(start_folder):
         if cand.exists() and _sdk_has_expected_layout(cand):
             return cand
 
-        # If the selected folder is an extracted archive parent, search one level down.
         if cand.exists() and cand.is_dir():
-            try:
-                for child in cand.iterdir():
-                    if child.is_dir() and _sdk_has_expected_layout(child):
-                        return child
-                    nested = child / "SDK2"
-                    if nested.exists() and _sdk_has_expected_layout(nested):
-                        return nested
-            except Exception:
-                pass
+            for folder in _iter_dirs_limited(cand, max_depth=6):
+                if _sdk_has_expected_layout(folder):
+                    return folder
+                nested = folder / "SDK2"
+                if nested.exists() and _sdk_has_expected_layout(nested):
+                    return nested
     return None
 
 
@@ -277,6 +474,16 @@ def apply_philips_sdk_paths(sdk_root: Path) -> None:
             prepend.append(str(d))
     if prepend:
         os.environ["PATH"] = os.pathsep.join(prepend + current_parts)
+
+    if sys.platform.startswith("linux"):
+        current_ld = os.environ.get("LD_LIBRARY_PATH", "")
+        current_ld_parts = current_ld.split(os.pathsep) if current_ld else []
+        ld_prepend = []
+        for d in dll_dirs:
+            if d.exists() and str(d) not in current_ld_parts and str(d) not in ld_prepend:
+                ld_prepend.append(str(d))
+        if ld_prepend:
+            os.environ["LD_LIBRARY_PATH"] = os.pathsep.join(ld_prepend + current_ld_parts)
 
     os.environ["PHILIPS_SDK_PATH"] = str(paths["sdk_root"])
     os.environ["PHILIPS_PATHOLOGY_SDK_PATH"] = str(paths["sdk_root"])
@@ -343,12 +550,18 @@ def require_openphi(sdk_root: Optional[Path] = None):
 
 def find_sdk_installer(sdk_root: Path) -> Optional[Path]:
     root = Path(sdk_root)
-    direct = root / "InstallPathologySDK.bat"
-    if direct.exists():
-        return direct
+    names = ["InstallPathologySDK.bat"] if sys.platform.startswith("win") else ["InstallPathologySDK.sh", "install.sh"]
+    for name in names:
+        direct = root / name
+        if direct.exists():
+            return direct
     try:
-        matches = list(root.rglob("InstallPathologySDK.bat"))
-        return matches[0] if matches else None
+        patterns = ["InstallPathologySDK.bat"] if sys.platform.startswith("win") else ["InstallPathologySDK.sh", "*.sh"]
+        for pat in patterns:
+            matches = list(root.rglob(pat))
+            if matches:
+                return matches[0]
+        return None
     except Exception:
         return None
 
@@ -368,6 +581,13 @@ def run_sdk_installer(sdk_root: Path) -> None:
         except Exception:
             subprocess.Popen(["cmd", "/c", str(installer)], cwd=str(installer.parent))
             return
+    if sys.platform.startswith("linux") or sys.platform == "darwin":
+        try:
+            installer.chmod(installer.stat().st_mode | 0o111)
+        except Exception:
+            pass
+        subprocess.Popen(["bash", str(installer)], cwd=str(installer.parent))
+        return
     subprocess.Popen([str(installer)], cwd=str(installer.parent))
 
 
@@ -602,7 +822,8 @@ def convert_isyntax_to_ome_tiff(
         raise ValueError("Expected .isyntax file, got: %s" % input_path.name)
 
     if output_dir is None or str(output_dir).strip() == "":
-        output_dir = input_path.parent / (input_path.stem + "_isyntax_ome_tiff")
+        # Default behavior: save the .ome.tif beside the original .isyntax file.
+        output_dir = input_path.parent
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / (input_path.stem + ".ome.tif")
@@ -891,8 +1112,8 @@ class MainWindow(QMainWindow):
 
         file_menu = menubar.addMenu("&File")
 
-        self.act_select_sdk = QAction("Select / Prepare SDK folder", self)
-        self.act_select_sdk.triggered.connect(self.select_sdk_folder)
+        self.act_select_sdk = QAction("Select / Prepare SDK ZIP or folder", self)
+        self.act_select_sdk.triggered.connect(self.select_sdk_source)
         file_menu.addAction(self.act_select_sdk)
 
         self.act_test_sdk = QAction("Test SDK", self)
@@ -948,7 +1169,7 @@ class MainWindow(QMainWindow):
 
         subtitle = QLabel(
             "Standalone Philips iSyntax converter. Output is pyramidal RGB OME-TIFF. "
-            "Philips SDK is configured from File > SDK setup and is not bundled with this app."
+            "Philips Pathology SDK is configured from File > Select / Prepare SDK ZIP or folder."
         )
         subtitle.setWordWrap(True)
         subtitle.setStyleSheet("color: #444; padding-bottom: 4px;")
@@ -962,7 +1183,7 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(QLabel("SDK folder:"), 0, 0)
         self.sdk_edit = QLineEdit()
         self.sdk_edit.setReadOnly(True)
-        self.sdk_edit.setPlaceholderText("File > Select / Prepare SDK folder")
+        self.sdk_edit.setPlaceholderText("File > Select / Prepare SDK ZIP or folder")
         status_layout.addWidget(self.sdk_edit, 0, 1)
 
         status_layout.addWidget(QLabel("Output folder:"), 1, 0)
@@ -1115,7 +1336,7 @@ class MainWindow(QMainWindow):
                 "Standalone Philips iSyntax to pyramidal RGB OME-TIFF converter.\n"
                 "Version: %s\n"
                 "Author: %s\n\n"
-                "The Philips Pathology SDK is configured separately and is not bundled with this app.\n\n"
+                "The Philips Pathology SDK is configured from the File menu.\n\n"
                 "Recommended for brightfield visual conversion workflows. "
                 "Not intended as a validated raw multichannel quantitative export."
             ) % (APP_VERSION, APP_AUTHOR)
@@ -1127,7 +1348,7 @@ class MainWindow(QMainWindow):
             "iSyntaxToTIFF Help",
             (
                 "Basic workflow:\n\n"
-                "1. File > Select / Prepare SDK folder\n"
+                "1. File > Select / Prepare SDK ZIP or folder\n"
                 "2. File > Test SDK\n"
                 "3. Add .isyntax files\n"
                 "4. Preview selected (optional)\n"
@@ -1149,11 +1370,14 @@ class MainWindow(QMainWindow):
         self.append_log("Output folder cleared. Output will be saved beside each .isyntax file.")
 
     def _startup_python_warning(self):
-        if sys.version_info[:2] != (3, 7):
+        if getattr(sys, "frozen", False):
+            return
+        expected = (3, 7) if sys.platform.startswith("win") else ((3, 8) if sys.platform.startswith("linux") else None)
+        if expected and sys.version_info[:2] != expected:
             self.append_log(
                 "WARNING: This app is currently running with Python %s. "
-                "The Philips SDK version tested here requires Python 3.7. "
-                "If pixelengine fails, run/build this app with isyntax_py37." % sys.version.split()[0]
+                "For source runs, Windows should use Python 3.7 and Linux should use Python 3.8. "
+                "Packaged app builds already include their own Python runtime." % sys.version.split()[0]
             )
 
     def _load_initial_settings(self):
@@ -1178,27 +1402,59 @@ class MainWindow(QMainWindow):
         self.settings["sdk_path"] = str(root)
         _save_settings(self.settings)
 
-    def select_sdk_folder(self):
+    def select_sdk_source(self):
         start = self.sdk_edit.text().strip() or str(Path.home())
-        folder = QFileDialog.getExistingDirectory(self, "Select Philips SDK folder", start)
-        if not folder:
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Select Philips Pathology SDK")
+        box.setText("Select the Philips Pathology SDK as either a ZIP file or an extracted folder.")
+        box.setInformativeText(
+            "You may select the full PathologySDK_2.0-L1_Packages ZIP or the platform-specific research ZIP. "
+            "The app will extract and detect the correct SDK folder."
+        )
+        zip_btn = box.addButton("Select ZIP file", QMessageBox.AcceptRole)
+        folder_btn = box.addButton("Select folder", QMessageBox.ActionRole)
+        cancel_btn = box.addButton(QMessageBox.Cancel)
+        box.exec_()
+
+        clicked = box.clickedButton()
+        if clicked == cancel_btn:
             return
-        root = find_philips_sdk_root(folder)
+        if clicked == zip_btn:
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Philips Pathology SDK ZIP",
+                start,
+                "ZIP files (*.zip);;All files (*)"
+            )
+        else:
+            path = QFileDialog.getExistingDirectory(self, "Select Philips Pathology SDK folder", start)
+
+        if not path:
+            return
+
+        self.append_log("Preparing SDK source: %s" % path)
+        root, msg = prepare_philips_sdk_source(Path(path), message_callback=self.append_log)
         if root is None:
-            self.sdk_edit.setText(folder)
-            msg = "Could not detect Philips SDK layout inside selected folder. Expected Modules/philips.pathologysdk.*"
+            self.sdk_edit.setText(path)
             self.sdk_status.setText(msg)
             QMessageBox.warning(self, "SDK not detected", msg)
             return
+
         self.sdk_edit.setText(str(root))
         self.save_sdk_path(root)
-        self.sdk_status.setText("SDK root selected: %s" % root)
-        self.append_log("SDK root selected: %s" % root)
+        self.sdk_status.setText(msg)
+        self.append_log(msg.replace("\n", " | "))
+        QMessageBox.information(
+            self,
+            "SDK prepared",
+            "%s\n\nNext step: File > Test SDK. If the test fails because system dependencies are missing, use File > Run SDK installer and then test again." % msg
+        )
 
     def test_sdk_clicked(self):
         root = self.current_sdk_root()
         if root is None:
-            QMessageBox.warning(self, "No SDK", "Select a valid Philips SDK folder first.")
+            QMessageBox.warning(self, "No SDK", "Select or prepare a valid Philips Pathology SDK ZIP/folder first.")
             return
         ok, msg = test_philips_sdk(root)
         self.sdk_status.setText(msg)
@@ -1212,7 +1468,7 @@ class MainWindow(QMainWindow):
     def run_installer_clicked(self):
         root = self.current_sdk_root()
         if root is None:
-            QMessageBox.warning(self, "No SDK", "Select a valid Philips SDK folder first.")
+            QMessageBox.warning(self, "No SDK", "Select or prepare a valid Philips Pathology SDK ZIP/folder first.")
             return
         try:
             run_sdk_installer(root)
@@ -1275,7 +1531,7 @@ class MainWindow(QMainWindow):
     def preview_selected(self):
         root = self.current_sdk_root()
         if root is None:
-            QMessageBox.warning(self, "No SDK", "Select and test a valid Philips SDK folder first.")
+            QMessageBox.warning(self, "No SDK", "Select/prepare and test a valid Philips Pathology SDK first.")
             return
         p = self.selected_input_path()
         if p is None:
@@ -1322,7 +1578,7 @@ class MainWindow(QMainWindow):
     def start_conversion(self):
         root = self.current_sdk_root()
         if root is None:
-            QMessageBox.warning(self, "No SDK", "Select and test a valid Philips SDK folder first.")
+            QMessageBox.warning(self, "No SDK", "Select/prepare and test a valid Philips Pathology SDK first.")
             return
 
         ok, msg = test_philips_sdk(root)
