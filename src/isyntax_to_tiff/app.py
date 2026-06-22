@@ -46,11 +46,11 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QLineEdit, QFileDialog, QMessageBox, QListWidget,
     QAbstractItemView, QGroupBox, QComboBox, QSpinBox, QCheckBox, QProgressBar,
-    QTextEdit, QSizePolicy
+    QTextEdit, QSizePolicy, QAction
 )
 
 
-APP_NAME = "iSyntaxToOMETIFF Converter"
+APP_NAME = "iSyntaxToTIFF"
 APP_VERSION = "1.0"
 APP_AUTHOR = "José Rodriguez-Rojas"
 APP_SETTINGS_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "TiffCropper"
@@ -826,7 +826,7 @@ class ConvertWorker(QThread):
 
             log_dir = self.output_dir or (self.input_paths[0].parent if self.input_paths else Path.cwd())
             log_dir.mkdir(parents=True, exist_ok=True)
-            log_path = log_dir / ("iSyntaxToOMETIFF_log_%s.csv" % datetime.now().strftime("%Y%m%d_%H%M%S"))
+            log_path = log_dir / ("iSyntaxToTIFF_log_%s.csv" % datetime.now().strftime("%Y%m%d_%H%M%S"))
             with open(str(log_path), "w", newline="", encoding="utf-8") as f:
                 fieldnames = ["timestamp", "input", "output", "status", "message"]
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -878,74 +878,126 @@ class MainWindow(QMainWindow):
         self.settings = _load_settings()
         self.worker = None
         self.current_output_dir = None
-        self.setWindowTitle("%s v%s" % (APP_NAME, APP_VERSION))
+        self.setWindowTitle(APP_NAME)
         self.resize(1100, 780)
         self._build_ui()
         self._load_initial_settings()
         self._update_jpeg_enabled()
         self._startup_python_warning()
 
+    def _build_menu(self):
+        """Build top menu actions so SDK/output setup is clearer."""
+        menubar = self.menuBar()
+
+        file_menu = menubar.addMenu("&File")
+
+        self.act_select_sdk = QAction("Select / Prepare SDK folder", self)
+        self.act_select_sdk.triggered.connect(self.select_sdk_folder)
+        file_menu.addAction(self.act_select_sdk)
+
+        self.act_test_sdk = QAction("Test SDK", self)
+        self.act_test_sdk.triggered.connect(self.test_sdk_clicked)
+        file_menu.addAction(self.act_test_sdk)
+
+        self.act_run_installer = QAction("Run SDK installer", self)
+        self.act_run_installer.triggered.connect(self.run_installer_clicked)
+        file_menu.addAction(self.act_run_installer)
+
+        self.act_open_sdk = QAction("Open SDK folder", self)
+        self.act_open_sdk.triggered.connect(self.open_sdk_folder_clicked)
+        file_menu.addAction(self.act_open_sdk)
+
+        self.act_clear_sdk = QAction("Clear saved SDK path", self)
+        self.act_clear_sdk.triggered.connect(self.clear_sdk_clicked)
+        file_menu.addAction(self.act_clear_sdk)
+
+        file_menu.addSeparator()
+
+        self.act_set_output = QAction("Set output folder", self)
+        self.act_set_output.triggered.connect(self.select_output_folder)
+        file_menu.addAction(self.act_set_output)
+
+        self.act_clear_output = QAction("Clear output folder", self)
+        self.act_clear_output.triggered.connect(self.clear_output_folder)
+        file_menu.addAction(self.act_clear_output)
+
+        file_menu.addSeparator()
+
+        self.act_exit = QAction("Exit", self)
+        self.act_exit.triggered.connect(self.close)
+        file_menu.addAction(self.act_exit)
+
+        help_menu = menubar.addMenu("&Help")
+
+        self.act_help = QAction("Help", self)
+        self.act_help.triggered.connect(self.show_help_dialog)
+        help_menu.addAction(self.act_help)
+
+        self.act_about = QAction("About", self)
+        self.act_about.triggered.connect(self.show_about_dialog)
+        help_menu.addAction(self.act_about)
+
     def _build_ui(self):
+        self._build_menu()
+
         root = QWidget()
         self.setCentralWidget(root)
         main = QVBoxLayout(root)
+        main.setContentsMargins(10, 8, 10, 8)
+        main.setSpacing(8)
 
-        title = QLabel("%s v%s" % (APP_NAME, APP_VERSION))
-        title.setStyleSheet("font-size: 18px; font-weight: bold;")
-        main.addWidget(title)
-
-        note = QLabel(
-            "Standalone iSyntax converter. Output is pyramidal RGB OME-TIFF. "
-            "Philips SDK is configured separately and is not bundled with this app."
+        subtitle = QLabel(
+            "Standalone Philips iSyntax converter. Output is pyramidal RGB OME-TIFF. "
+            "Philips SDK is configured from File > SDK setup and is not bundled with this app."
         )
-        note.setWordWrap(True)
-        note.setStyleSheet("color: #555;")
-        main.addWidget(note)
+        subtitle.setWordWrap(True)
+        subtitle.setStyleSheet("color: #444; padding-bottom: 4px;")
+        main.addWidget(subtitle)
 
-        # SDK setup
-        sdk_box = QGroupBox("Philips SDK setup - one-time configuration")
-        sdk_layout = QGridLayout(sdk_box)
-        sdk_layout.addWidget(QLabel("SDK folder:"), 0, 0)
+        # Status panel: show paths/status only. Configuration actions live in the File menu.
+        status_box = QGroupBox("Setup status")
+        status_layout = QGridLayout(status_box)
+        status_layout.setColumnStretch(1, 1)
+
+        status_layout.addWidget(QLabel("SDK folder:"), 0, 0)
         self.sdk_edit = QLineEdit()
-        sdk_layout.addWidget(self.sdk_edit, 0, 1, 1, 5)
-        self.btn_select_sdk = QPushButton("Select / Prepare SDK folder")
-        self.btn_test_sdk = QPushButton("Test SDK")
-        self.btn_run_installer = QPushButton("Run SDK installer")
-        self.btn_open_sdk = QPushButton("Open SDK folder")
-        self.btn_clear_sdk = QPushButton("Clear saved SDK path")
-        sdk_layout.addWidget(self.btn_select_sdk, 1, 0)
-        sdk_layout.addWidget(self.btn_test_sdk, 1, 1)
-        sdk_layout.addWidget(self.btn_run_installer, 1, 2)
-        sdk_layout.addWidget(self.btn_open_sdk, 1, 3)
-        sdk_layout.addWidget(self.btn_clear_sdk, 1, 4)
+        self.sdk_edit.setReadOnly(True)
+        self.sdk_edit.setPlaceholderText("File > Select / Prepare SDK folder")
+        status_layout.addWidget(self.sdk_edit, 0, 1)
+
+        status_layout.addWidget(QLabel("Output folder:"), 1, 0)
+        self.output_edit = QLineEdit()
+        self.output_edit.setReadOnly(True)
+        self.output_edit.setPlaceholderText("Not set: output will be saved beside each .isyntax file")
+        status_layout.addWidget(self.output_edit, 1, 1)
+
         self.sdk_status = QLabel("SDK status: not tested")
         self.sdk_status.setWordWrap(True)
-        self.sdk_status.setStyleSheet("color: #444;")
-        sdk_layout.addWidget(self.sdk_status, 2, 0, 1, 6)
-        main.addWidget(sdk_box)
+        self.sdk_status.setStyleSheet("color: #444; padding-top: 4px;")
+        status_layout.addWidget(self.sdk_status, 2, 0, 1, 2)
+        main.addWidget(status_box)
 
         # Inputs
         input_box = QGroupBox("Philips iSyntax input")
         input_layout = QGridLayout(input_box)
+        input_layout.setColumnStretch(0, 1)
         self.file_list = QListWidget()
         self.file_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        input_layout.addWidget(self.file_list, 0, 0, 6, 4)
+        input_layout.addWidget(self.file_list, 0, 0, 5, 1)
+
         self.btn_add_files = QPushButton("Add .isyntax files")
         self.btn_remove_files = QPushButton("Remove selected")
         self.btn_clear_files = QPushButton("Clear list")
         self.btn_preview = QPushButton("Preview selected")
-        input_layout.addWidget(self.btn_add_files, 0, 4)
-        input_layout.addWidget(self.btn_remove_files, 1, 4)
-        input_layout.addWidget(self.btn_clear_files, 2, 4)
-        input_layout.addWidget(self.btn_preview, 3, 4)
-        input_layout.addWidget(QLabel("Output folder optional:"), 4, 4)
-        out_row = QHBoxLayout()
-        self.output_edit = QLineEdit()
-        self.output_edit.setPlaceholderText("Leave empty to create output beside each .isyntax")
-        self.btn_output = QPushButton("Select output folder")
-        out_row.addWidget(self.output_edit, 1)
-        out_row.addWidget(self.btn_output)
-        input_layout.addLayout(out_row, 5, 4)
+        input_layout.addWidget(self.btn_add_files, 0, 1)
+        input_layout.addWidget(self.btn_remove_files, 1, 1)
+        input_layout.addWidget(self.btn_clear_files, 2, 1)
+        input_layout.addWidget(self.btn_preview, 3, 1)
+
+        output_hint = QLabel("Output folder is set from File > Set output folder. If empty, each output is saved beside its .isyntax file.")
+        output_hint.setWordWrap(True)
+        output_hint.setStyleSheet("color: #666;")
+        input_layout.addWidget(output_hint, 4, 1)
         main.addWidget(input_box)
 
         # Preview + options side-by-side
@@ -961,6 +1013,7 @@ class MainWindow(QMainWindow):
 
         options_box = QGroupBox("Conversion options")
         opt = QGridLayout(options_box)
+        opt.setColumnStretch(1, 1)
         row = 0
         opt.addWidget(QLabel("Compression:"), row, 0)
         self.compression_combo = QComboBox()
@@ -1045,19 +1098,55 @@ class MainWindow(QMainWindow):
         main.addWidget(self.log)
 
         # Signals
-        self.btn_select_sdk.clicked.connect(self.select_sdk_folder)
-        self.btn_test_sdk.clicked.connect(self.test_sdk_clicked)
-        self.btn_run_installer.clicked.connect(self.run_installer_clicked)
-        self.btn_open_sdk.clicked.connect(self.open_sdk_folder_clicked)
-        self.btn_clear_sdk.clicked.connect(self.clear_sdk_clicked)
         self.btn_add_files.clicked.connect(self.add_files)
         self.btn_remove_files.clicked.connect(self.remove_selected_files)
         self.btn_clear_files.clicked.connect(self.file_list.clear)
         self.btn_preview.clicked.connect(self.preview_selected)
-        self.btn_output.clicked.connect(self.select_output_folder)
         self.compression_combo.currentIndexChanged.connect(self._update_jpeg_enabled)
         self.btn_convert.clicked.connect(self.start_conversion)
         self.btn_cancel.clicked.connect(self.cancel_conversion)
+
+    def show_about_dialog(self):
+        QMessageBox.information(
+            self,
+            "About iSyntaxToTIFF",
+            (
+                "iSyntaxToTIFF\n\n"
+                "Standalone Philips iSyntax to pyramidal RGB OME-TIFF converter.\n"
+                "Version: %s\n"
+                "Author: %s\n\n"
+                "The Philips Pathology SDK is configured separately and is not bundled with this app.\n\n"
+                "Recommended for brightfield visual conversion workflows. "
+                "Not intended as a validated raw multichannel quantitative export."
+            ) % (APP_VERSION, APP_AUTHOR)
+        )
+
+    def show_help_dialog(self):
+        QMessageBox.information(
+            self,
+            "iSyntaxToTIFF Help",
+            (
+                "Basic workflow:\n\n"
+                "1. File > Select / Prepare SDK folder\n"
+                "2. File > Test SDK\n"
+                "3. Add .isyntax files\n"
+                "4. Preview selected (optional)\n"
+                "5. File > Set output folder (optional)\n"
+                "   If no output folder is set, output is saved beside each .isyntax file.\n"
+                "6. Choose compression and conversion options\n"
+                "7. Click Convert to pyramidal OME-TIFF\n\n"
+                "Notes:\n"
+                "- Deflate lossless is recommended.\n"
+                "- JPEG quality applies only when JPEG compression is selected.\n"
+                "- Output is a rendered RGB OME-TIFF from OpenPhi."
+            )
+        )
+
+    def clear_output_folder(self):
+        self.output_edit.clear()
+        self.settings.pop("last_output_dir", None)
+        _save_settings(self.settings)
+        self.append_log("Output folder cleared. Output will be saved beside each .isyntax file.")
 
     def _startup_python_warning(self):
         if sys.version_info[:2] != (3, 7):
