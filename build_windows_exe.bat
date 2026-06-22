@@ -11,17 +11,30 @@ if errorlevel 1 (
 set PYTHONNOUSERSITE=1
 
 python -m pip install --upgrade "pip<24"
+if errorlevel 1 exit /b 1
+
 python -m pip install -r requirements-windows-py37.txt
+if errorlevel 1 exit /b 1
 
 if exist dist rmdir /s /q dist
 if exist build rmdir /s /q build
 
+python -m PyInstaller --version
+if errorlevel 1 exit /b 1
+
 python -m PyInstaller --clean --noconfirm --distpath "%CD%\dist" --workpath "%CD%\build" "%CD%\iSyntaxToTIFF.spec"
 if errorlevel 1 exit /b 1
 
+echo Listing generated files:
+dir /s /b dist
+
+if not exist "dist" (
+    echo The dist folder was not created.
+    exit /b 1
+)
+
 if not exist "dist\iSyntaxToTIFF\iSyntaxToTIFF.exe" (
     echo Expected output was not found: dist\iSyntaxToTIFF\iSyntaxToTIFF.exe
-    dir /s /b dist
     exit /b 1
 )
 

@@ -27,75 +27,84 @@ jobs:
           channels: conda-forge,defaults
 
       - name: Install Windows dependencies
-        shell: cmd /C CALL {0}
-        run: |
-          conda activate isyntax_py37
-          set PYTHONNOUSERSITE=1
-          python -m pip install --upgrade "pip<24"
-          python -m pip install -r requirements-windows-py37.txt
-
-      - name: Check Windows build environment
-        shell: cmd /C CALL {0}
-        run: |
-          conda activate isyntax_py37
-          set PYTHONNOUSERSITE=1
-          python -c "import sys; print(sys.executable); print(sys.version)"
-          python -c "import PyQt5; print('PyQt5 OK')"
-          python -c "import tifffile; print('tifffile OK:', tifffile.__version__)"
-          python -c "import numpy; print('numpy OK:', numpy.__version__)"
-          echo OpenPhi is tested inside the app after the Philips Pathology SDK is selected.
-
-      - name: Build Windows app
-        shell: cmd /C CALL {0}
-        run: |
-          conda activate isyntax_py37
-          set PYTHONNOUSERSITE=1
-          if exist "%GITHUB_WORKSPACE%\dist" rmdir /s /q "%GITHUB_WORKSPACE%\dist"
-          if exist "%GITHUB_WORKSPACE%\build" rmdir /s /q "%GITHUB_WORKSPACE%\build"
-          python -m PyInstaller --clean --noconfirm --distpath "%GITHUB_WORKSPACE%\dist" --workpath "%GITHUB_WORKSPACE%\build" "%GITHUB_WORKSPACE%\iSyntaxToTIFF.spec"
-          echo Listing generated files:
-          dir "%GITHUB_WORKSPACE%\dist" /s /b
-          if not exist "%GITHUB_WORKSPACE%\dist\iSyntaxToTIFF" (
-            echo Expected PyInstaller output folder was not created.
-            dir "%GITHUB_WORKSPACE%" /s /b
-            exit /b 1
-          )
-
-      - name: Package Windows app
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           Set-Location $env:GITHUB_WORKSPACE
-          $distDir = Join-Path $env:GITHUB_WORKSPACE "dist"
-          $preferredAppDir = Join-Path $distDir "iSyntaxToTIFF"
+          $env:PYTHONNOUSERSITE = "1"
 
-          Write-Host "Workspace:" $env:GITHUB_WORKSPACE
-          Write-Host "Listing dist contents:"
-          if (Test-Path $distDir) {
-            Get-ChildItem -Path $distDir -Recurse | ForEach-Object { Write-Host $_.FullName }
-          } else {
-            Write-Host "The dist folder was not created. Full workspace listing:"
-            Get-ChildItem -Path $env:GITHUB_WORKSPACE -Recurse | ForEach-Object { Write-Host $_.FullName }
+          conda run -n isyntax_py37 python -m pip install --upgrade "pip<24"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          conda run -n isyntax_py37 python -m pip install -r requirements-windows-py37.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Check Windows build environment
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-Location $env:GITHUB_WORKSPACE
+          $env:PYTHONNOUSERSITE = "1"
+
+          conda run -n isyntax_py37 python -c "import sys; print(sys.executable); print(sys.version)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          conda run -n isyntax_py37 python -c "import PyQt5; print('PyQt5 OK')"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          conda run -n isyntax_py37 python -c "import tifffile; print('tifffile OK:', tifffile.__version__)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          conda run -n isyntax_py37 python -c "import numpy; print('numpy OK:', numpy.__version__)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          conda run -n isyntax_py37 python -m PyInstaller --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          Write-Host "OpenPhi is tested inside the app after the Philips Pathology SDK is selected."
+
+      - name: Build and package Windows app
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-Location $env:GITHUB_WORKSPACE
+          $env:PYTHONNOUSERSITE = "1"
+
+          $distDir = Join-Path $env:GITHUB_WORKSPACE "dist"
+          $buildDir = Join-Path $env:GITHUB_WORKSPACE "build"
+          $zipPath = Join-Path $env:GITHUB_WORKSPACE "iSyntaxToTIFF-Windows.zip"
+
+          if (Test-Path $distDir) { Remove-Item $distDir -Recurse -Force }
+          if (Test-Path $buildDir) { Remove-Item $buildDir -Recurse -Force }
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+
+          Write-Host "Running PyInstaller..."
+          conda run -n isyntax_py37 python -m PyInstaller --clean --noconfirm --distpath "$distDir" --workpath "$buildDir" "$env:GITHUB_WORKSPACE\iSyntaxToTIFF.spec"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          Write-Host "Workspace after PyInstaller:"
+          Get-ChildItem -Path $env:GITHUB_WORKSPACE -Recurse | ForEach-Object { Write-Host $_.FullName }
+
+          if (-not (Test-Path $distDir)) {
+            Write-Host "PyInstaller completed but the dist folder was not created."
             exit 1
           }
 
-          if (Test-Path $preferredAppDir) {
-            $appDir = $preferredAppDir
-          } else {
-            $appExe = Get-ChildItem -Path $env:GITHUB_WORKSPACE -Recurse -File -Filter "iSyntaxToTIFF.exe" | Where-Object {
-              $_.FullName -notmatch "\\build\\" -and $_.FullName -notmatch "\\__pycache__\\"
-            } | Select-Object -First 1
-
-            if (-not $appExe) {
-              Write-Host "Could not find the iSyntaxToTIFF executable generated by PyInstaller."
-              exit 1
-            }
-            $appDir = $appExe.Directory.FullName
+          $appExe = Get-ChildItem -Path $distDir -Recurse -File -Filter "iSyntaxToTIFF.exe" | Select-Object -First 1
+          if (-not $appExe) {
+            Write-Host "Could not find iSyntaxToTIFF.exe inside dist."
+            exit 1
           }
 
+          $appDir = $appExe.Directory.FullName
           Write-Host "Packaging folder:" $appDir
-          $zipPath = Join-Path $env:GITHUB_WORKSPACE "iSyntaxToTIFF-Windows.zip"
-          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
           Compress-Archive -Path (Join-Path $appDir "*") -DestinationPath $zipPath -Force
+
+          if (-not (Test-Path $zipPath)) {
+            Write-Host "Package was not created."
+            exit 1
+          }
+
           Write-Host "Created package:" $zipPath
 
       - name: Upload Windows artifact
@@ -156,26 +165,33 @@ jobs:
           python -c "import PyQt5; print('PyQt5 OK')"
           python -c "import tifffile; print('tifffile OK:', tifffile.__version__)"
           python -c "import numpy; print('numpy OK:', numpy.__version__)"
+          python -m PyInstaller --version
           echo "OpenPhi is tested inside the app after the Philips Pathology SDK is selected."
 
-      - name: Build Linux app
+      - name: Build and package Linux app
         run: |
           . .venv/bin/activate
-          rm -rf dist build
-          python -m PyInstaller --clean --noconfirm --distpath "$GITHUB_WORKSPACE/dist" --workpath "$GITHUB_WORKSPACE/build" "$GITHUB_WORKSPACE/iSyntaxToTIFF.spec"
-          echo "Listing generated files:"
-          find "$GITHUB_WORKSPACE/dist" -maxdepth 4 -print
-          test -d "$GITHUB_WORKSPACE/dist/iSyntaxToTIFF"
+          rm -rf "$GITHUB_WORKSPACE/dist" "$GITHUB_WORKSPACE/build" "$GITHUB_WORKSPACE/iSyntaxToTIFF-Linux.tar.gz"
 
-      - name: Package Linux app
-        run: |
-          if [ -d "$GITHUB_WORKSPACE/dist/iSyntaxToTIFF" ]; then
-            tar -czf "$GITHUB_WORKSPACE/iSyntaxToTIFF-Linux.tar.gz" -C "$GITHUB_WORKSPACE/dist" iSyntaxToTIFF
-          else
-            echo "Could not find Linux PyInstaller output."
-            find "$GITHUB_WORKSPACE" -maxdepth 4 -print || true
+          python -m PyInstaller --clean --noconfirm --distpath "$GITHUB_WORKSPACE/dist" --workpath "$GITHUB_WORKSPACE/build" "$GITHUB_WORKSPACE/iSyntaxToTIFF.spec"
+
+          echo "Workspace after PyInstaller:"
+          find "$GITHUB_WORKSPACE" -maxdepth 5 -print
+
+          if [ ! -d "$GITHUB_WORKSPACE/dist" ]; then
+            echo "PyInstaller completed but the dist folder was not created."
             exit 1
           fi
+
+          APP_BIN="$(find "$GITHUB_WORKSPACE/dist" -type f -name iSyntaxToTIFF | head -n 1)"
+          if [ -z "$APP_BIN" ]; then
+            echo "Could not find iSyntaxToTIFF binary inside dist."
+            exit 1
+          fi
+
+          APP_DIR="$(dirname "$APP_BIN")"
+          echo "Packaging folder: $APP_DIR"
+          tar -czf "$GITHUB_WORKSPACE/iSyntaxToTIFF-Linux.tar.gz" -C "$APP_DIR" .
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
