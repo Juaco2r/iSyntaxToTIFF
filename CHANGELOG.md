@@ -4,6 +4,8 @@ All notable changes to **iSyntaxToTIFF** are documented in this file.
 
 ## v1.0.0 - 2026-06-22
 
+DOI: https://doi.org/10.5281/zenodo.20798592
+
 ### Added
 
 - Initial public release of iSyntaxToTIFF.

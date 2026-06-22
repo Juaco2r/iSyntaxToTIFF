@@ -1,5 +1,7 @@
 # Release notes - iSyntaxToTIFF v1.0.0
 
+DOI: https://doi.org/10.5281/zenodo.20798592
+
 This is the initial public release of **iSyntaxToTIFF**, a standalone research tool for converting Philips `.isyntax` whole-slide images to pyramidal RGB OME-TIFF using OpenPhi and the Philips Pathology SDK.
 
 ## Main features

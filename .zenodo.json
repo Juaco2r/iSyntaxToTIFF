@@ -24,5 +24,12 @@
     "bioimage analysis",
     "Python"
   ],
+  "related_identifiers": [
+    {
+      "identifier": "10.5281/zenodo.20798592",
+      "relation": "isIdenticalTo",
+      "scheme": "doi"
+    }
+  ],
   "notes": "The Philips Pathology SDK is a separate third-party dependency and is not part of this repository. Users must obtain the SDK directly from Philips and comply with the applicable Philips license terms."
 }

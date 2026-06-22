@@ -1,7 +1,8 @@
 cff-version: 1.2.0
 message: "If you use iSyntaxToTIFF, please cite this software."
+doi: 10.5281/zenodo.20798592
+version: 1.0
 title: "iSyntaxToTIFF: A standalone converter for Philips iSyntax whole-slide images to pyramidal OME-TIFF"
-version: "1.0.0"
 date-released: "2026-06-22"
 license: MIT
 repository-code: "https://github.com/Juaco2r/iSyntaxToTIFF"

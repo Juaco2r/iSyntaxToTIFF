@@ -55,8 +55,18 @@ from PyQt5.QtWidgets import (
 
 
 APP_NAME = "iSyntaxToTIFF"
-APP_VERSION = "1.7"
+APP_VERSION = "1.0"
 APP_AUTHOR = "José Rodriguez-Rojas"
+APP_YEAR = "2026"
+APP_DOI = "10.5281/zenodo.20798592"
+APP_DOI_URL = "https://doi.org/10.5281/zenodo.20798592"
+APP_GITHUB = "https://github.com/Juaco2r/iSyntaxToTIFF"
+APP_LICENSE = "MIT License"
+APP_CITATION = (
+    "Rodriguez-Rojas J. iSyntaxToTIFF: A standalone converter for Philips "
+    "iSyntax whole-slide images to pyramidal OME-TIFF. Zenodo; 2026. "
+    "doi:10.5281/zenodo.20798592"
+)
 
 
 def _app_config_dir() -> Path:
@@ -1400,13 +1410,29 @@ class MainWindow(QMainWindow):
             "About iSyntaxToTIFF",
             (
                 "iSyntaxToTIFF\n\n"
-                "Standalone Philips iSyntax to pyramidal RGB OME-TIFF converter.\n"
+                "A standalone converter for Philips iSyntax whole-slide images "
+                "to pyramidal RGB OME-TIFF.\n\n"
                 "Version: %s\n"
-                "Author: %s\n\n"
-                "The Philips Pathology SDK is configured from the File menu.\n\n"
+                "Author: %s\n"
+                "License: %s\n\n"
+                "DOI: %s\n"
+                "Zenodo: %s\n"
+                "GitHub: %s\n\n"
+                "Citation:\n"
+                "%s\n\n"
+                "The Philips Pathology SDK is configured from the File menu and "
+                "must be obtained separately from Philips according to the applicable license terms.\n\n"
                 "Recommended for brightfield visual conversion workflows. "
                 "Not intended as a validated raw multichannel quantitative export."
-            ) % (APP_VERSION, APP_AUTHOR)
+            ) % (
+                APP_VERSION,
+                APP_AUTHOR,
+                APP_LICENSE,
+                APP_DOI,
+                APP_DOI_URL,
+                APP_GITHUB,
+                APP_CITATION,
+            )
         )
 
     def show_help_dialog(self):

@@ -1,5 +1,7 @@
 # iSyntaxToTIFF
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20798592.svg)](https://doi.org/10.5281/zenodo.20798592)
+
 Standalone tool to convert Philips `.isyntax` whole-slide images to pyramidal RGB OME-TIFF using OpenPhi and the Philips Pathology SDK.
 
 The application is designed as a focused iSyntax converter, separate from TiffCropper, so that iSyntax support can remain isolated from the standard crop, preview, tile, merge, and visualization workflows.
@@ -210,11 +212,11 @@ iSyntaxToTIFF-Linux.tar.gz
 ```markdown
 ## Citation
 
-If you use **iSyntaxToTIFF** in your research, please cite the corresponding Zenodo release.
+If you use **iSyntaxToTIFF** in your research, please cite:
 
-Recommended citation format:
+Rodríguez-Rojas J. *iSyntaxToTIFF: A standalone converter for Philips iSyntax whole-slide images to pyramidal OME-TIFF*. Zenodo. 2026. https://doi.org/10.5281/zenodo.20798592
 
-Rodríguez-Rojas J. iSyntaxToTIFF: A standalone converter for Philips iSyntax whole-slide images to pyramidal OME-TIFF. Zenodo. 2026. DOI: [add DOI after Zenodo release].
+DOI: `10.5281/zenodo.20798592`
 
 The citation metadata is also provided in [`CITATION.cff`](CITATION.cff) and [`.zenodo.json`](.zenodo.json).
 ```
