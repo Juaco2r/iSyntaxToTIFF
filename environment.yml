@@ -1,0 +1,16 @@
+name: isyntax_py37
+channels:
+  - conda-forge
+dependencies:
+  - python=3.7.12
+  - pip<24
+  - numpy<1.22
+  - pillow<10
+  - pyqt=5.15
+  - tifffile<2023
+  - imagecodecs<2023
+  - zarr<2.17
+  - numcodecs<0.12
+  - pip:
+      - openphi
+      - pyinstaller==5.13.2
