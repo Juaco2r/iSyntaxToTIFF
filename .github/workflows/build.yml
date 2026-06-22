@@ -1,0 +1,168 @@
+name: Build iSyntaxToTIFF
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows no-SDK
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Miniconda Python 3.7
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: isyntax_py37
+          python-version: "3.7"
+          auto-activate-base: false
+          channels: conda-forge,defaults
+
+      - name: Install Windows dependencies
+        shell: cmd /C CALL {0}
+        run: |
+          conda activate isyntax_py37
+          python -m pip install --upgrade "pip<24"
+          pip install -r requirements-windows-py37.txt
+
+      - name: Check Windows build environment
+        shell: cmd /C CALL {0}
+        run: |
+          conda activate isyntax_py37
+          python -c "import sys; print(sys.executable); print(sys.version)"
+          python -c "import PyQt5; print('PyQt5 OK')"
+          python -c "import tifffile; print('tifffile OK:', tifffile.__version__)"
+
+      - name: Build Windows app
+        shell: cmd /C CALL {0}
+        run: |
+          conda activate isyntax_py37
+          pyinstaller --clean --noconfirm iSyntaxToTIFF.spec
+
+      - name: Package Windows app
+        shell: pwsh
+        run: |
+          Write-Host "Listing dist contents:"
+          Get-ChildItem -Recurse dist
+
+          if (Test-Path "dist\iSyntaxToTIFF\iSyntaxToTIFF.exe") {
+            Compress-Archive -Path "dist\iSyntaxToTIFF\*" -DestinationPath "iSyntaxToTIFF-Windows-no-SDK.zip" -Force
+          }
+          else {
+            Write-Host "Could not find Windows PyInstaller output."
+            Get-ChildItem -Recurse dist
+            exit 1
+          }
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: iSyntaxToTIFF-Windows-no-SDK
+          path: iSyntaxToTIFF-Windows-no-SDK.zip
+
+  build-linux:
+    name: Build Linux no-SDK
+    runs-on: ubuntu-24.04
+    container: ubuntu:20.04
+
+    steps:
+      - name: Install base tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            git \
+            curl \
+            zip \
+            tar \
+            python3.8 \
+            python3.8-dev \
+            python3.8-venv \
+            python3-pip \
+            build-essential \
+            libgl1 \
+            libglib2.0-0 \
+            libx11-xcb1 \
+            libxcb-xinerama0 \
+            libxcb-cursor0 \
+            libxkbcommon-x11-0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-render-util0 \
+            libxcb-randr0 \
+            libxcb-shape0 \
+            libxcb-xfixes0 \
+            libxcb-sync1 \
+            libxcb-glx0
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux Python dependencies
+        run: |
+          python3.8 -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements-linux-py38.txt
+
+      - name: Check Linux build environment
+        run: |
+          . .venv/bin/activate
+          python -c "import sys; print(sys.executable); print(sys.version)"
+          python -c "import PyQt5; print('PyQt5 OK')"
+          python -c "import tifffile; print('tifffile OK:', tifffile.__version__)"
+
+      - name: Build Linux app
+        run: |
+          . .venv/bin/activate
+          pyinstaller --clean --noconfirm iSyntaxToTIFF.spec
+
+      - name: Package Linux app
+        run: |
+          echo "Listing dist contents:"
+          find dist -maxdepth 3 -type f -o -type d
+
+          if [ -d "dist/iSyntaxToTIFF" ]; then
+            tar -czf iSyntaxToTIFF-Linux-no-SDK.tar.gz -C dist iSyntaxToTIFF
+          else
+            echo "Could not find Linux PyInstaller output."
+            find dist -maxdepth 3 -type f -o -type d
+            exit 1
+          fi
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: iSyntaxToTIFF-Linux-no-SDK
+          path: iSyntaxToTIFF-Linux-no-SDK.tar.gz
+
+  release:
+    name: Create GitHub Release
+    needs: [build-windows, build-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: |
+          find artifacts -type f
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/iSyntaxToTIFF-Windows-no-SDK/iSyntaxToTIFF-Windows-no-SDK.zip
+            artifacts/iSyntaxToTIFF-Linux-no-SDK/iSyntaxToTIFF-Linux-no-SDK.tar.gz

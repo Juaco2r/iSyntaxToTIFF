@@ -1,0 +1,9 @@
+numpy<1.22
+Pillow<10
+PyQt5<5.16
+tifffile<2023
+imagecodecs<2023
+zarr<2.17
+numcodecs<0.12
+openphi
+pyinstaller==5.13.2

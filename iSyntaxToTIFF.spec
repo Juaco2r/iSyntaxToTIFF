@@ -1,23 +1,23 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import os
+import sys
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 block_cipher = None
-project_root = os.path.abspath('.')
-script_path = os.path.join(project_root, 'src', 'isyntax_to_tiff', 'app.py')
-assets_path = os.path.join(project_root, 'assets')
-icon_path = os.path.join(assets_path, 'icon', 'app.ico')
+
+project_root = os.path.abspath(".")
+assets_path = os.path.join(project_root, "assets")
+icon_path = os.path.join(assets_path, "icon", "app.ico")
 
 datas = []
 binaries = []
 hiddenimports = []
 
 if os.path.isdir(assets_path):
-    datas.append((assets_path, 'assets'))
+    datas.append((assets_path, "assets"))
 
-# Bundle normal Python dependencies needed by the converter.
-for pkg in ['tifffile', 'imagecodecs', 'zarr', 'numcodecs', 'PIL']:
+for pkg in ["imagecodecs", "numcodecs", "zarr", "tifffile"]:
     try:
         pkg_datas, pkg_bins, pkg_hidden = collect_all(pkg)
         datas += pkg_datas
@@ -27,20 +27,19 @@ for pkg in ['tifffile', 'imagecodecs', 'zarr', 'numcodecs', 'PIL']:
         pass
 
 try:
-    hiddenimports += collect_submodules('openphi')
+    hiddenimports += collect_submodules("openphi")
 except Exception:
-    hiddenimports += ['openphi']
+    hiddenimports += ["openphi"]
 
-# IMPORTANT: Philips SDK modules are intentionally NOT bundled.
-# The user configures the Philips SDK folder from inside the app.
+# Do not bundle Philips SDK modules.
 excludedimports = [
-    'pixelengine',
-    'softwarerenderbackend',
-    'softwarerendercontext',
+    "pixelengine",
+    "softwarerenderbackend",
+    "softwarerendercontext",
 ]
 
 a = Analysis(
-    [script_path],
+    ["src/isyntax_to_tiff/app.py"],
     pathex=[project_root],
     binaries=binaries,
     datas=datas,
@@ -57,18 +56,24 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
-exe = EXE(
-    pyz,
-    a.scripts,
-    [],
+exe_kwargs = dict(
     exclude_binaries=True,
-    name='iSyntaxToTIFF',
+    name="iSyntaxToTIFF",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
     console=False,
-    icon=icon_path if os.path.exists(icon_path) else None,
+)
+
+if sys.platform.startswith("win") and os.path.exists(icon_path):
+    exe_kwargs["icon"] = icon_path
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    **exe_kwargs,
 )
 
 coll = COLLECT(
@@ -79,5 +84,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name='iSyntaxToTIFF',
+    name="iSyntaxToTIFF",
 )
