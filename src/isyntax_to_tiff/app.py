@@ -55,7 +55,7 @@ from PyQt5.QtWidgets import (
 
 
 APP_NAME = "iSyntaxToTIFF"
-APP_VERSION = "1.1"
+APP_VERSION = "1.7"
 APP_AUTHOR = "José Rodriguez-Rojas"
 
 
@@ -77,7 +77,8 @@ def _app_data_dir() -> Path:
 
 APP_SETTINGS_DIR = _app_config_dir()
 APP_SETTINGS_FILE = APP_SETTINGS_DIR / "settings.json"
-APP_SDK_EXTRACT_DIR = _app_data_dir() / "PhilipsSDK"
+APP_SDK_EXTRACT_DIR = _app_data_dir() / "SDK"
+APP_SDK_LEGACY_EXTRACT_DIR = _app_data_dir() / "PhilipsSDK"
 
 
 # ============================================================
@@ -248,28 +249,91 @@ def _find_matching_sdk_zip(folder: Path) -> Optional[Path]:
     return None
 
 
-def _safe_extract_zip(zip_path: Path, dest_dir: Path) -> None:
+
+def _single_zip_root(member_names: List[str]) -> Optional[str]:
+    """Return the single top-level folder in a ZIP, if all members share one."""
+    roots = set()
+    for name in member_names:
+        clean = name.replace("\\", "/").strip("/")
+        if not clean:
+            continue
+        first = clean.split("/", 1)[0]
+        if first:
+            roots.add(first)
+    if len(roots) == 1:
+        return next(iter(roots))
+    return None
+
+
+def _short_sdk_extract_name(zip_path: Path) -> str:
+    """Use short extraction folders to avoid Windows MAX_PATH issues."""
+    name = zip_path.name.lower().replace("-", "_")
+    if sys.platform.startswith("win") and "windows" in name and "py37" in name:
+        return "win_py37"
+    if sys.platform.startswith("linux") and ("ubuntu20" in name or "linux" in name) and "py38" in name:
+        return "linux_py38"
+    if "pathologysdk" in name and "packages" in name:
+        return "packages"
+    return _safe_name(zip_path.stem)[:40] or "sdk_zip"
+
+
+def _safe_extract_zip(zip_path: Path, dest_dir: Path, strip_single_root: bool = True) -> None:
+    """Safely extract a ZIP while avoiding nested duplicate root folders.
+
+    Philips SDK package ZIPs usually contain a top-level folder with the same
+    name as the ZIP. If we extract the ZIP into a folder with that same name,
+    paths become duplicated and can exceed the Windows path limit. This helper
+    strips that common top-level folder and creates parent folders explicitly.
+    """
     zip_path = Path(zip_path)
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest_resolved = dest_dir.resolve()
 
     with zipfile.ZipFile(str(zip_path), "r") as zf:
-        for member in zf.infolist():
-            member_name = member.filename.replace("\\", "/")
+        infos = zf.infolist()
+        raw_names = [m.filename.replace("\\", "/").strip("/") for m in infos if m.filename]
+        common_root = _single_zip_root(raw_names) if strip_single_root else None
+
+        for member in infos:
+            member_name = member.filename.replace("\\", "/").strip("/")
+            if not member_name:
+                continue
             if member_name.startswith("/") or ".." in Path(member_name).parts:
                 raise RuntimeError("Unsafe path inside ZIP: %s" % member.filename)
-            target = (dest_dir / member_name).resolve()
+
+            rel_name = member_name
+            if common_root and (rel_name == common_root or rel_name.startswith(common_root + "/")):
+                rel_name = rel_name[len(common_root):].lstrip("/")
+                if not rel_name:
+                    continue
+
+            target = (dest_dir / rel_name).resolve()
             if not str(target).startswith(str(dest_resolved)):
                 raise RuntimeError("Unsafe path inside ZIP: %s" % member.filename)
-        zf.extractall(str(dest_dir))
+
+            if member.is_dir() or member_name.endswith("/"):
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(member, "r") as src, open(str(target), "wb") as dst:
+                shutil.copyfileobj(src, dst)
+
+            # Preserve executable bits on Linux/macOS when present.
+            try:
+                mode = (member.external_attr >> 16) & 0o777
+                if mode:
+                    os.chmod(str(target), mode)
+            except Exception:
+                pass
 
 
 def _extract_zip_if_needed(zip_path: Path, extract_parent: Path, message_callback=None) -> Path:
     zip_path = Path(zip_path)
     extract_parent = Path(extract_parent)
     extract_parent.mkdir(parents=True, exist_ok=True)
-    out_dir = extract_parent / _safe_name(zip_path.stem)
+    out_dir = extract_parent / _short_sdk_extract_name(zip_path)
 
     if out_dir.exists() and find_philips_sdk_root(str(out_dir)) is not None:
         if message_callback:
@@ -280,15 +344,17 @@ def _extract_zip_if_needed(zip_path: Path, extract_parent: Path, message_callbac
         try:
             shutil.rmtree(str(out_dir))
         except Exception:
-            pass
+            # If Windows keeps a DLL locked, create a fresh folder instead of failing.
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            out_dir = extract_parent / (out_dir.name + "_" + stamp)
+
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if message_callback:
         message_callback("Extracting SDK ZIP: %s" % zip_path.name)
         message_callback("Extraction folder: %s" % out_dir)
-    _safe_extract_zip(zip_path, out_dir)
+    _safe_extract_zip(zip_path, out_dir, strip_single_root=True)
     return out_dir
-
 
 def prepare_philips_sdk_source(source_path: Path, message_callback=None) -> Tuple[Optional[Path], str]:
     """Accept either a Philips Pathology SDK ZIP or an extracted folder.
@@ -382,6 +448,7 @@ def _candidate_sdk_roots_from(start_folder: Optional[str] = None) -> List[Path]:
 
     # Prepared SDKs extracted by the app.
     add(APP_SDK_EXTRACT_DIR)
+    add(APP_SDK_LEGACY_EXTRACT_DIR)
 
     # Common Windows location used during development/testing.
     add(r"C:\PhilipsSDK\SDK2")
