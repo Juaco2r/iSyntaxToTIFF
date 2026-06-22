@@ -1,9 +1,38 @@
-# Third-party and SDK notice
+# Third-party dependency notice
 
-This repository does **not** include the Philips Pathology SDK, Philips SDK binaries, or Philips SDK documentation.
+## Philips Pathology SDK
 
-Philips iSyntax support requires users to obtain and use the Philips Pathology SDK separately under their own authorization and according to the applicable Philips End User License Agreement.
+**iSyntaxToTIFF** requires the Philips Pathology SDK to read Philips `.isyntax` whole-slide images.
 
-The packaged EXE built by this repository is a **no-SDK build**. It includes the Python application and ordinary Python dependencies, but the Philips SDK folder must be configured by the user inside the application.
+The Philips Pathology SDK is a separate third-party dependency. It is not part of this repository, and it is not distributed as part of this application code.
 
-For internal institutional use, share the Philips SDK only through institution-approved channels and only when permitted by the applicable license. External users should obtain the SDK directly from Philips.
+Users should obtain the Philips Pathology SDK directly from Philips and comply with the applicable Philips license terms.
+
+As of June 2026, the Philips Pathology SDK can be accessed from:
+
+```text
+https://philips.mizecx.com/login.html
+```
+
+A possible access route is to enter as `GuestUser`, search for `PathologySDK`, and download:
+
+```text
+PathologySDK_2.0-L1_Packages
+```
+
+Inside that package, use the research Python SDK package matching the operating system:
+
+```text
+Windows: Philips Pathology SDK for Windows / Python 3.7 research package
+Linux:   Philips Pathology SDK for Ubuntu 20.04 / Python 3.8 research package
+```
+
+## OpenPhi
+
+This software uses OpenPhi to access Philips `.isyntax` images through the Philips Pathology SDK.
+
+OpenPhi is an external open-source package and remains subject to its own license and citation requirements.
+
+## Python dependencies
+
+Other Python dependencies are listed in the repository requirement files and remain subject to their own licenses.

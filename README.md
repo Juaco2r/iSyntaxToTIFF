@@ -207,10 +207,16 @@ iSyntaxToTIFF-Windows.zip
 iSyntaxToTIFF-Linux.tar.gz
 ```
 
-## Suggested repository name
+```markdown
+## Citation
 
-```text
-iSyntaxToTIFF
+If you use **iSyntaxToTIFF** in your research, please cite the corresponding Zenodo release.
+
+Recommended citation format:
+
+Rodríguez-Rojas J. iSyntaxToTIFF: A standalone converter for Philips iSyntax whole-slide images to pyramidal OME-TIFF. Zenodo. 2026. DOI: [add DOI after Zenodo release].
+
+The citation metadata is also provided in [`CITATION.cff`](CITATION.cff) and [`.zenodo.json`](.zenodo.json).
 ```
 
 ## License

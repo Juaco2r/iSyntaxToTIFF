@@ -1,0 +1,28 @@
+{
+  "title": "iSyntaxToTIFF: A standalone converter for Philips iSyntax whole-slide images to pyramidal OME-TIFF",
+  "upload_type": "software",
+  "description": "iSyntaxToTIFF is a standalone research software tool for converting Philips .isyntax whole-slide images to pyramidal RGB OME-TIFF using OpenPhi and the Philips Pathology SDK. The application provides SDK configuration, import testing, thumbnail preview, tiled conversion, Deflate lossless compression by default, optional JPEG compression, and CSV conversion logging.",
+  "creators": [
+    {
+      "name": "Rodríguez-Rojas, José",
+      "affiliation": "University of Barcelona",
+      "orcid": "0000-0003-4373-5480"
+    }
+  ],
+  "access_right": "open",
+  "license": "MIT",
+  "version": "1.0.0",
+  "language": "eng",
+  "keywords": [
+    "digital pathology",
+    "whole-slide imaging",
+    "iSyntax",
+    "OME-TIFF",
+    "OpenPhi",
+    "Philips Pathology SDK",
+    "WSI",
+    "bioimage analysis",
+    "Python"
+  ],
+  "notes": "The Philips Pathology SDK is a separate third-party dependency and is not part of this repository. Users must obtain the SDK directly from Philips and comply with the applicable Philips license terms."
+}
