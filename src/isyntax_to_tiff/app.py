@@ -1454,7 +1454,7 @@ class MainWindow(QMainWindow):
     def test_sdk_clicked(self):
         root = self.current_sdk_root()
         if root is None:
-            QMessageBox.warning(self, "No SDK", "Select or prepare a valid Philips Pathology SDK ZIP/folder first.")
+            QMessageBox.warning(self, "SDK required", "Select or prepare a valid Philips Pathology SDK ZIP/folder first.")
             return
         ok, msg = test_philips_sdk(root)
         self.sdk_status.setText(msg)
@@ -1468,7 +1468,7 @@ class MainWindow(QMainWindow):
     def run_installer_clicked(self):
         root = self.current_sdk_root()
         if root is None:
-            QMessageBox.warning(self, "No SDK", "Select or prepare a valid Philips Pathology SDK ZIP/folder first.")
+            QMessageBox.warning(self, "SDK required", "Select or prepare a valid Philips Pathology SDK ZIP/folder first.")
             return
         try:
             run_sdk_installer(root)
@@ -1484,7 +1484,7 @@ class MainWindow(QMainWindow):
     def open_sdk_folder_clicked(self):
         root = self.current_sdk_root()
         if root is None:
-            QMessageBox.warning(self, "No SDK", "No valid SDK folder selected.")
+            QMessageBox.warning(self, "SDK required", "No valid SDK folder selected.")
             return
         _open_folder(root)
 
@@ -1531,7 +1531,7 @@ class MainWindow(QMainWindow):
     def preview_selected(self):
         root = self.current_sdk_root()
         if root is None:
-            QMessageBox.warning(self, "No SDK", "Select/prepare and test a valid Philips Pathology SDK first.")
+            QMessageBox.warning(self, "SDK required", "Select/prepare and test a valid Philips Pathology SDK first.")
             return
         p = self.selected_input_path()
         if p is None:
@@ -1578,7 +1578,7 @@ class MainWindow(QMainWindow):
     def start_conversion(self):
         root = self.current_sdk_root()
         if root is None:
-            QMessageBox.warning(self, "No SDK", "Select/prepare and test a valid Philips Pathology SDK first.")
+            QMessageBox.warning(self, "SDK required", "Select/prepare and test a valid Philips Pathology SDK first.")
             return
 
         ok, msg = test_philips_sdk(root)
